@@ -4,7 +4,8 @@
 configuration UI and an LVGL status screen. A headless ESP32 QEMU profile is
 also included for testing the bidirectional byte pump without hardware.
 
-Current firmware version: **1.2.0**. It is shown persistently in the display
+The firmware version comes from a tag on the built commit, or `dev` when the
+commit has no tag. It is shown persistently in the display
 header and on the captive-portal configuration page.
 
 SerTun32 turns a supported T-Display S3 into a transparent bridge between its
@@ -162,13 +163,28 @@ PlatformIO environments select the required firmware:
 | `lilygo-t-display` | Original ESP32 T-Display (with limitation) |
 | `qemu-esp32` | Espressif QEMU, headless UART bridge |
 
+Use the reproducible build wrapper to build and export a target:
+
 ```bash
-./venv/bin/pio run
-./venv/bin/pio run -e lilygo-t-display
-./venv/bin/pio run -e qemu-esp32
+./scripts/build_firmware.sh lilygo-t-display-s3
+./scripts/build_firmware.sh lilygo-t-display
+./scripts/build_firmware.sh qemu-esp32
 ```
 
-Build output is stored in `.pio/build/<environment>/firmware.bin`.
+Artifacts are stored in `dist/<environment>/` with `SHA256SUMS`. The wrapper
+uses the current Git commit timestamp as `SOURCE_DATE_EPOCH`, fixes locale and
+timezone settings, and normalizes source/package paths embedded by the
+compiler. CI renames the exported folders to `<version>_<environment>`.
+
+To prove that an environment is reproducible, build it twice from different
+filesystem paths and compare every exported binary and ELF:
+
+```bash
+./scripts/verify_reproducible_build.sh lilygo-t-display-s3
+```
+
+PlatformIO Core, the Espressif platform, LVGL, and TFT_eSPI versions are pinned.
+Changing one of these versions intentionally changes the resulting hashes.
 
 ### 3. Upload a physical board
 
@@ -251,7 +267,7 @@ Configure the device to connect to the test computer on TCP port `30121`, then
 run:
 
 ```bash
-./venv/bin/pip install -r requirements-test.txt
+./venv/bin/pip install -r requirements.txt
 ./venv/bin/pytest -v --serial-port=/dev/ttyACM0 --tcp-port=30121
 ```
 
@@ -305,6 +321,31 @@ Each iteration completes USB→TCP verification and TCP→USB verification befor
 the next byte starts. By default it sends 1,000 messages and logs progress
 every 100 iterations. Override
 these defaults with `--ping-pong-count=N` and `--ping-pong-log-every=N`.
+
+## Continuous integration
+
+GitHub Actions builds every PlatformIO environment on pushes, tags, and pull
+requests. Each target exports `firmware.bin`, `firmware.elf`,
+`bootloader.bin`, `partitions.bin`, and `SHA256SUMS` as a downloadable
+artifact. The QEMU artifact also contains the complete
+`sertun32-qemu-4m.bin` flash image. Physical-board artifacts also contain
+`boot_app0.bin` for flashing at `0xE000`.
+
+For each target, CI performs two clean builds from different checkout paths
+and uploads artifacts only after all SHA-256 hashes match and the final bundle
+passes `sha256sum --check`. Artifact names include the resolved version, and each
+bundle contains `CI-BUILD-INFO.txt` with the repository, commit, workflow run,
+target, build epoch, and PlatformIO version. CI does not execute the firmware
+under QEMU; the QEMU environment is built only to export its binaries.
+
+The `sertun32-<version>-diyflasher` artifact contains all three
+`<version>_<environment>/` folders and `firmwares-sertun32.json`. The JSON uses
+the [DIYFlasher catalog format](https://github.com/valerio-vaccaro/diyflasher)
+and lists the two physical boards with relative URLs to their flash files.
+To serve it from DIYFlasher, copy the JSON and physical-board folders together
+into that site's web root, then add `firmwares-sertun32.json` to the site's
+firmware catalog loader. The QEMU folder is included for download but is not
+listed as a flashable board.
 
 ## First-time setup walkthrough
 

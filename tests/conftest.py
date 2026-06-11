@@ -44,6 +44,12 @@ def pytest_addoption(parser):
     )
     group.addoption("--ping-pong-count", type=int, default=1_000)
     group.addoption("--ping-pong-log-every", type=int, default=100)
+    group.addoption("--qemu-uart0-port", type=int, default=30121)
+    group.addoption("--qemu-uart2-port", type=int, default=30122)
+    group.addoption(
+        "--qemu-status-log",
+        default=".pio/build/qemu-esp32/uart1-status.log",
+    )
 
 
 def pytest_configure(config):
@@ -146,6 +152,66 @@ def pytest_sessionfinish(session, exitstatus):
         exitstatus,
         session.testscollected,
     )
+
+
+def connect_with_retry(port, timeout):
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            connection = socket.create_connection(("127.0.0.1", port), timeout=1)
+            connection.settimeout(10)
+            connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            return connection
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"QEMU UART endpoint 127.0.0.1:{port} was not ready "
+                    f"within {timeout:.1f}s"
+                )
+            time.sleep(0.25)
+
+
+@pytest.fixture(scope="session")
+def qemu_uart_bridge(request):
+    uart0_port = request.config.getoption("--qemu-uart0-port")
+    uart2_port = request.config.getoption("--qemu-uart2-port")
+    status_path = Path(
+        request.config.getoption("--qemu-status-log")
+    ).resolve()
+    timeout = request.config.getoption("--connect-timeout")
+
+    LOGGER.info(
+        "QEMU connecting uart0=127.0.0.1:%s uart2=127.0.0.1:%s",
+        uart0_port,
+        uart2_port,
+    )
+    with connect_with_retry(uart0_port, timeout) as uart0:
+        with connect_with_retry(uart2_port, timeout) as uart2:
+            ready_deadline = time.monotonic() + timeout
+            while time.monotonic() < ready_deadline:
+                if status_path.exists() and "ready: UART0 <-> UART2" in (
+                    status_path.read_text(encoding="utf-8", errors="replace")
+                ):
+                    break
+                time.sleep(0.25)
+            else:
+                raise TimeoutError(
+                    f"QEMU firmware did not report ready in {status_path}"
+                )
+
+            for endpoint in (uart0, uart2):
+                endpoint.settimeout(0.05)
+                while True:
+                    try:
+                        if not endpoint.recv(4096):
+                            break
+                    except TimeoutError:
+                        break
+                endpoint.settimeout(10)
+
+            LOGGER.info("QEMU firmware UART bridge ready")
+            yield {"uart0": uart0, "uart2": uart2}
+            LOGGER.info("QEMU UART bridge connections closing")
 
 
 @pytest.fixture(scope="session")

@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PIO_VERSION: "6.1.19"
+  LC_ALL: C
+  TZ: UTC
+  PYTHONHASHSEED: "0"
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.detect.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: detect
+        name: Get version from a tag on this commit
+        shell: bash
+        run: |
+          version="$(git tag --sort=-version:refname --points-at HEAD | head -n 1)"
+          version="${version:-dev}"
+          [[ "${version}" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid version: ${version}" >&2; exit 1; }
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+  firmware:
+    name: Firmware / ${{ matrix.environment }}
+    needs: version
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - lilygo-t-display-s3
+          - lilygo-t-display
+          - qemu-esp32
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install PlatformIO
+        run: python -m pip install "platformio==${PIO_VERSION}"
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ env.PIO_VERSION }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-${{ env.PIO_VERSION }}-
+
+      - name: Set reproducible build epoch
+        run: |
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "${GITHUB_ENV}"
+          echo "SERTUN_VERSION=${{ needs.version.outputs.version }}" >> "${GITHUB_ENV}"
+
+      - name: Build and verify reproducibility
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+        run: PIO=pio ./scripts/verify_reproducible_build.sh "${ENVIRONMENT}"
+
+      - name: Validate CI artifact bundle
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+        run: |
+          artifact_dir="dist/${SERTUN_VERSION}_${ENVIRONMENT}"
+          mv "dist/${ENVIRONMENT}" "${artifact_dir}"
+          cd "${artifact_dir}"
+
+          required=(
+            bootloader.bin
+            firmware.bin
+            firmware.elf
+            partitions.bin
+            SHA256SUMS
+          )
+          if [[ "${ENVIRONMENT}" == "qemu-esp32" ]]; then
+            required+=(sertun32-qemu-4m.bin)
+          else
+            required+=(boot_app0.bin)
+          fi
+
+          for artifact in "${required[@]}"; do
+            test -s "${artifact}"
+          done
+          sha256sum --check SHA256SUMS
+
+          {
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "commit=${GITHUB_SHA}"
+            echo "ref=${GITHUB_REF}"
+            echo "workflow=${GITHUB_WORKFLOW}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
+            echo "environment=${ENVIRONMENT}"
+            echo "version=${SERTUN_VERSION}"
+            echo "source_date_epoch=${SOURCE_DATE_EPOCH}"
+            echo "platformio=${PIO_VERSION}"
+          } > CI-BUILD-INFO.txt
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.version.outputs.version }}_${{ matrix.environment }}
+          path: dist/${{ needs.version.outputs.version }}_${{ matrix.environment }}/
+          if-no-files-found: error
+          include-hidden-files: false
+
+  flasher-bundle:
+    name: DIYFlasher bundle
+    needs: [version, firmware]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ needs.version.outputs.version }}_*
+          path: dist
+      - name: Create DIYFlasher catalog
+        run: python3 scripts/make_flasher_catalog.py "${{ needs.version.outputs.version }}" dist
+      - name: Upload complete bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: sertun32-${{ needs.version.outputs.version }}-diyflasher
+          path: dist/
+          if-no-files-found: error

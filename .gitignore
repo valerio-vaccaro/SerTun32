@@ -53,3 +53,11 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+SerTun32.psf
+test-results
+__pycache__
+*.pyc
+.coverage
+.pio/
+dist/

@@ -3,11 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${ROOT_DIR}/.pio/build/qemu-esp32"
-PIO="${ROOT_DIR}/venv/bin/pio"
-ESPTOOL="${HOME}/.platformio/packages/tool-esptoolpy/esptool.py"
+PIO="${PIO:-${ROOT_DIR}/venv/bin/pio}"
+PLATFORMIO_CORE_DIR="${PLATFORMIO_CORE_DIR:-${HOME}/.platformio}"
+ESPTOOL="${ESPTOOL:-${PLATFORMIO_CORE_DIR}/packages/tool-esptoolpy/esptool.py}"
 FLASH_IMAGE="${BUILD_DIR}/sertun32-qemu-4m.bin"
 
-"${PIO}" run -e qemu-esp32
+if [[ ! -x "${PIO}" ]]; then
+    PIO="$(command -v pio)"
+fi
+
+"${PIO}" run --project-dir "${ROOT_DIR}" -e qemu-esp32
 
 python3 "${ESPTOOL}" --chip esp32 merge_bin --fill-flash-size 4MB \
     -o "${FLASH_IMAGE}" \

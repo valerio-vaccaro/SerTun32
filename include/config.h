@@ -14,7 +14,9 @@
 /* ------------------------------------------------------------------------- */
 /*  Firmware identity                                                        */
 /* ------------------------------------------------------------------------- */
-#define FIRMWARE_VERSION    "1.2.0"
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION    "dev"
+#endif
 
 #if defined(SERTUN_BOARD_TDISPLAY_S3)
 #define FIRMWARE_TARGET     "T-Display-S3"

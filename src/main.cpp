@@ -303,7 +303,7 @@ static void buildUi() {
     lv_obj_set_style_bg_opa(ui_header, LV_OPA_COVER, LV_PART_MAIN);
 
     ui_title = lv_label_create(ui_header);
-    lv_label_set_text(ui_title, "SerTun32 v" FIRMWARE_VERSION);
+    lv_label_set_text(ui_title, "SerTun32 " FIRMWARE_VERSION);
     lv_obj_set_style_text_color(ui_title, COLOR_BG, LV_PART_MAIN);
     lv_obj_set_style_text_font(ui_title, UI_TITLE_FONT, LV_PART_MAIN);
     lv_obj_center(ui_title);
