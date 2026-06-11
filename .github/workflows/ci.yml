@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PIO_VERSION: "6.1.19"
+  LC_ALL: C
+  TZ: UTC
+  PYTHONHASHSEED: "0"
+
+jobs:
+  firmware:
+    name: Firmware / ${{ matrix.environment }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - lilygo-t-display-s3
+          - lilygo-t-display
+          - qemu-esp32
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install PlatformIO
+        run: python -m pip install "platformio==${PIO_VERSION}"
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ env.PIO_VERSION }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-${{ env.PIO_VERSION }}-
+
+      - name: Set reproducible build epoch
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "${GITHUB_ENV}"
+
+      - name: Build and verify reproducibility
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+        run: PIO=pio ./scripts/verify_reproducible_build.sh "${ENVIRONMENT}"
+
+      - name: Validate CI artifact bundle
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+        run: |
+          artifact_dir="dist/${ENVIRONMENT}"
+          cd "${artifact_dir}"
+
+          required=(
+            bootloader.bin
+            firmware.bin
+            firmware.elf
+            partitions.bin
+            SHA256SUMS
+          )
+          if [[ "${ENVIRONMENT}" == "qemu-esp32" ]]; then
+            required+=(sertun32-qemu-4m.bin)
+          fi
+
+          for artifact in "${required[@]}"; do
+            test -s "${artifact}"
+          done
+          sha256sum --check SHA256SUMS
+
+          {
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "commit=${GITHUB_SHA}"
+            echo "ref=${GITHUB_REF}"
+            echo "workflow=${GITHUB_WORKFLOW}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
+            echo "environment=${ENVIRONMENT}"
+            echo "source_date_epoch=${SOURCE_DATE_EPOCH}"
+            echo "platformio=${PIO_VERSION}"
+          } > CI-BUILD-INFO.txt
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.environment }}-${{ github.sha }}
+          path: dist/${{ matrix.environment }}/
+          if-no-files-found: error
+          include-hidden-files: false
